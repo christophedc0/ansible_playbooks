@@ -1,0 +1,80 @@
+---
+- hosts: plex_slave
+  become: yes
+
+  tasks:
+  - name: Populate service facts.
+    ansible.builtin.service_facts:
+
+  - name: Updating apt.
+    apt:
+      update_cache: yes
+      cache_valid_time: 3600
+
+  - name: Updating plexmediaserver package.
+    apt:
+      name: plexmediaserver
+      state: latest
+      update_cache: yes
+
+  - name: Stopping plexmediaserver.
+    ansible.builtin.systemd:
+      name: plexmediaserver
+      state: stopped
+    when: ansible_facts.services['plexmediaserver.service'].state == "running" 
+
+  - name: Repopulate service facts.
+    ansible.builtin.service_facts:
+ 
+  - name: Backing up Plex preferences.
+    command: cp "Library/Application Support/Plex Media Server/Preferences.xml" /tmp/Preferences.bckp
+    args:
+      chdir: /var/lib/plexmediaserver
+      warn: false
+    when: ansible_facts.services['plexmediaserver.service'].state == "stopped"
+    register: plexpref_backup
+
+  - name: Removing the current Plex library.
+    file:
+      path: /var/lib/plexmediaserver/Library
+      state: absent
+    when: plexpref_backup is succeeded
+    register: plexlib_remove
+
+  - name: Decompressing the new Plex library.
+    command: tar -xf /tmp/PlexBackup.tar.gz
+    args:
+      chdir: /var/lib/plexmediaserver
+      warn: false
+    when: ansible_facts.services['plexmediaserver.service'].state == "stopped" and plexpref_backup is succeeded and plexlib_remove is succeeded
+    register: plex_decompress
+
+  - name: Restoring Plex preferences.
+    command: cp /tmp/Preferences.bckp "Library/Application Support/Plex Media Server/Preferences.xml"
+    args:
+      chdir: /var/lib/plexmediaserver
+      warn: false
+    when: plex_decompress is succeeded
+    register: plexpref_restore
+  - name: Applying Plex permissions.
+    file:
+      path: /var/lib/plexmediaserver/Library
+      owner: plex
+      group: plex
+    register: plexlib_perm
+
+  - name: Cleaning up.
+    command: rm -r /tmp/PlexBackup.tar.gz
+    args:
+      warn: false
+    when: plexlib_perm is succeeded
+    register: plex_clean
+
+  - name: Starting plexmediaserver.
+    ansible.builtin.systemd:
+      name: plexmediaserver
+      state: started
+    when: ansible_facts.services['plexmediaserver.service'].state == "stopped" and plex_clean is succeeded
+
+  - name: Repopulate service facts.
+    ansible.builtin.service_facts:
