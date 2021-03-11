@@ -1,0 +1,6 @@
+---
+- name: Begin on the master Plex node.
+  import_playbook: plex_master.yml
+
+- name: Begin on the slave Plex node.
+  import_playbook: plex_slave.yml

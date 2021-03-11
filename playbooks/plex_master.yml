@@ -1,0 +1,60 @@
+---
+- hosts: plex_master
+  become: yes
+
+  tasks:
+  - name: Populate service facts.
+    ansible.builtin.service_facts:
+
+  - name: Updating apt.
+    apt:
+      update_cache: yes
+      cache_valid_time: 3600
+
+  - name: Updating plexmediaserver package.
+    apt:
+      name: plexmediaserver
+      state: latest
+      update_cache: yes
+
+  - name: Stopping plexmediaserver.
+    ansible.builtin.systemd:
+      name: plexmediaserver
+      state: stopped
+    when: ansible_facts.services['plexmediaserver.service'].state == "running" 
+
+  - name: Repopulate service facts.
+    ansible.builtin.service_facts:
+
+  - name: Compressing the Plex library.
+    command: tar --exclude="Library/Application Support/Plex Media Server/Cache" --exclude="Library/Application Support/Plex Media Server/Preferences.xml" -czf /tmp/PlexBackup.tar.gz ./Library
+    args:
+      chdir: /var/lib/plexmediaserver
+      warn: false
+    when: ansible_facts.services['plexmediaserver.service'].state == "stopped" 
+    register: plex_compress
+
+  - name: Copying the Plex library to the slave.
+    become: no
+    command: scp /tmp/PlexBackup.tar.gz root@10.32.0.240:/tmp/PlexBackup.tar.gz
+    args:
+      chdir: /tmp
+      warn: false
+    when: plex_compress is succeeded
+    register: plex_scp
+
+  - name: Cleaning up.
+    command: rm -r /tmp/PlexBackup.tar.gz
+    args:
+      warn: false
+    when: plex_scp is succeeded
+    register: plex_clean
+
+  - name: Starting plexmediaserver.
+    ansible.builtin.systemd:
+      name: plexmediaserver
+      state: started
+    when: ansible_facts.services['plexmediaserver.service'].state == "stopped" and plex_clean is succeeded
+
+  - name: Repopulate service facts.
+    ansible.builtin.service_facts:
